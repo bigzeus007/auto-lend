@@ -1,101 +1,148 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.js
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+import { useEffect, useState } from "react";
+import { auth } from "@/lib/firebase";
+import { useAuthState } from "react-firebase-hooks/auth";
+import { useRouter } from "next/navigation";
+import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import styles from "@/styles/Home.module.css";
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
+const db = getFirestore(); // Initialisation Firestore
+const googleProvider = new GoogleAuthProvider(); // Fournisseur Google
+
+export default function HomePage() {
+  const [user, loading, error] = useAuthState(auth); // Gestion de l'état utilisateur
+  const [role, setRole] = useState(null); // Rôle de l'utilisateur
+  const [fetchingRole, setFetchingRole] = useState(false); // Indicateur de récupération du rôle
+  const router = useRouter();
+
+  // Fonction de connexion avec Google
+  const handleGoogleLogin = async () => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+
+      console.log("Utilisateur connecté :", user);
+
+      // Référence Firestore pour cet utilisateur
+      const userDocRef = doc(db, "users", user.uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (!userDoc.exists()) {
+        // Ajouter un nouvel utilisateur dans Firestore
+        await setDoc(userDocRef, {
+          email: user.email,
+          name: user.displayName || "Utilisateur inconnu",
+          profilePicture: user.photoURL || "",
+          role: "pending", // Rôle par défaut
+          requestStatus: [0, 0], // Statut initial
+        });
+        console.log("Nouvel utilisateur ajouté dans Firestore.");
+        setRole("pending");
+      } else {
+        console.log("Utilisateur existant dans Firestore :", userDoc.data());
+        setRole(userDoc.data().role); // Définit le rôle existant
+      }
+    } catch (err) {
+      if (err.code === "auth/popup-closed-by-user") {
+        console.warn("L'utilisateur a fermé la fenêtre d'authentification.");
+      } else {
+        console.error("Erreur d'authentification :", err.message);
+      }
+    }
+  };
+
+  // Fonction pour récupérer ou créer l'utilisateur
+  const fetchOrCreateUser = async (uid) => {
+    setFetchingRole(true);
+    try {
+      const userDocRef = doc(db, "users", uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (userDoc.exists()) {
+        console.log("Utilisateur existant :", userDoc.data());
+        setRole(userDoc.data().role); // Définit le rôle de l'utilisateur
+      } else {
+        console.warn("Utilisateur inexistant, création en cours...");
+        await setDoc(userDocRef, {
+          email: auth.currentUser?.email || "",
+          name: auth.currentUser?.displayName || "Utilisateur inconnu",
+          profilePicture: auth.currentUser?.photoURL || "",
+          role: "pending",
+          requestStatus: [0, 0],
+        });
+        console.log("Nouvel utilisateur ajouté !");
+        setRole("pending");
+      }
+    } catch (err) {
+      console.error("Erreur lors de la récupération ou création de l'utilisateur :", err.message);
+      setRole("error");
+    } finally {
+      setFetchingRole(false);
+    }
+  };
+
+  // Redirection en fonction du rôle
+  useEffect(() => {
+    if (user && role === null) {
+      fetchOrCreateUser(user.uid);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (role) {
+      console.log("Redirection en fonction du rôle :", role);
+      if (role === "admin") {
+        router.push("/dashboard/admin");
+      } else if (role === "user") {
+        router.push("/dashboard/user");
+      } else if (role === "pending") {
+        router.push("/auth/pending");
+      }
+    }
+  }, [role, router]);
+
+  // Gestion des états de chargement et des erreurs
+  if (loading || fetchingRole) {
+    return (
+      <main className={styles.main}>
+        <h1>Chargement...</h1>
       </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className={styles.main}>
+        <h1>Erreur : {error.message}</h1>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <main className={styles.main}>
+        <h1 className={styles.heading}>Bienvenue sur AutoLend</h1>
+        <button onClick={handleGoogleLogin} className={styles.loginButton}>
+          Connexion avec Google
+        </button>
+      </main>
+    );
+  }
+
+  if (role === "error") {
+    return (
+      <main className={styles.main}>
+        <h1>Erreur lors de la récupération des données utilisateur.</h1>
+        <p>Veuillez réessayer ou contacter l'administrateur.</p>
+      </main>
+    );
+  }
+
+  return (
+    <main className={styles.main}>
+      <h1>Authentification en cours...</h1>
+    </main>
   );
 }
